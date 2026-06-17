@@ -1842,5 +1842,175 @@
 })();
 </script>
 
+
+<script id="phase5u-identity-progress-sync-fix">
+(function(){
+  const FALLBACK_EMPLOYEES = {
+    '10094': {employee_id:'10094', full_name:'Md Khairul Anam', wing:'Sales', team:'SRK Sales', designation:'Sales'},
+    '10092': {employee_id:'10092', full_name:'Sharmin Akter Shanta', wing:'Sales', team:'SRK Sales', designation:'Sales'},
+    '10090': {employee_id:'10090', full_name:'Md Motiur Rahman', wing:'Sales', team:'SRK Sales', designation:'Sales'}
+  };
+  function safeText(value){ return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
+  function currentProfile(){ return window.portalProfile || {}; }
+  function currentEmployeeId(){
+    const p = currentProfile();
+    const raw = p.employee_id || p.employeeId || (window.portalUser && window.portalUser.email ? String(window.portalUser.email).split('@')[0] : '');
+    return String(raw || '').trim();
+  }
+  function fallbackFor(emp){ return FALLBACK_EMPLOYEES[String(emp || '').trim()] || null; }
+  function mergedProfile(){
+    const p = Object.assign({}, currentProfile());
+    const emp = String(p.employee_id || p.employeeId || currentEmployeeId() || '').trim();
+    const fb = fallbackFor(emp);
+    if(emp && !p.employee_id) p.employee_id = emp;
+    if(fb){
+      if(!p.full_name) p.full_name = fb.full_name;
+      if(!p.wing) p.wing = fb.wing;
+      if(!p.team) p.team = fb.team;
+      if(!p.designation) p.designation = fb.designation;
+    }
+    return p;
+  }
+  function commitMergedProfile(extra){
+    const merged = Object.assign(mergedProfile(), extra || {});
+    window.portalProfile = merged;
+    try{ portalProfile = merged; }catch(e){}
+    return merged;
+  }
+  async function enrichFromDirectory(){
+    const client = window.supabaseClient;
+    const emp = currentEmployeeId();
+    if(!client || !emp) { commitMergedProfile(); return; }
+    try{
+      const res = await client.from('employee_directory').select('employee_id,full_name,wing,team,designation,role,is_active').eq('employee_id', emp).maybeSingle();
+      if(res && res.data){ commitMergedProfile(res.data); }
+      else commitMergedProfile();
+    }catch(err){ commitMergedProfile(); console.warn('identity directory fallback used', err); }
+  }
+  function displayFullName(){
+    const p = mergedProfile();
+    const emp = currentEmployeeId();
+    return p.full_name || (fallbackFor(emp) && fallbackFor(emp).full_name) || emp || 'SWISH Team Member';
+  }
+  function displayWing(){
+    const p = mergedProfile();
+    const emp = currentEmployeeId();
+    const fb = fallbackFor(emp);
+    return p.wing || p.team || (fb && (fb.wing || fb.team)) || 'Participant';
+  }
+  function displayDesignation(){
+    const p = mergedProfile();
+    const emp = currentEmployeeId();
+    const fb = fallbackFor(emp);
+    return p.designation || (fb && fb.designation) || '';
+  }
+  function roleLabel(){
+    try{ if(typeof roleName === 'function') return roleName(); }catch(e){}
+    const p = mergedProfile();
+    const role = String(p.role || '').toLowerCase();
+    return role === 'admin' ? 'Admin' : role === 'reviewer' ? 'Reviewer' : 'Participant';
+  }
+  function ensureIdentityBar(){
+    const app = document.getElementById('portalApp');
+    if(!app) return null;
+    let bar = document.getElementById('loggedIdentityBar');
+    if(!bar){
+      bar = document.createElement('div');
+      bar.id = 'loggedIdentityBar';
+      bar.className = 'loggedIdentityBar';
+      const topbar = app.querySelector('.topbar');
+      if(topbar && topbar.parentNode) topbar.parentNode.insertBefore(bar, topbar.nextSibling);
+      else app.insertBefore(bar, app.firstChild);
+    }
+    return bar;
+  }
+  function updateIdentityBar(){
+    const bar = ensureIdentityBar();
+    if(!bar) return;
+    const emp = currentEmployeeId();
+    const p = mergedProfile();
+    bar.innerHTML = `<div class="shell loggedIdentityInner"><div><span class="identityLabel">Logged in as</span><b>${safeText(displayFullName())}</b><span class="identityMeta">ID ${safeText(emp || '—')} • ${safeText(displayWing())}${displayDesignation()? ' • '+safeText(displayDesignation()) : ''} • ${safeText(roleLabel())}</span></div><div class="identityNote">Study progress report update হবে যখন participant product card-এর <b>Studied</b> tick/untick করবে বা evaluation submit করবে। শুধু login করলে progress 0% থাকাই normal.</div></div>`;
+    const meta = document.getElementById('accountMeta');
+    if(meta){ meta.innerHTML = `<b>${safeText(displayFullName())}</b><br>ID ${safeText(emp || '—')} • ${safeText(displayWing())} • ${safeText(roleLabel())}`; }
+  }
+  function hydrateRow(row){
+    if(!row) return row;
+    const emp = String(row.employee_id || '').trim();
+    const fb = fallbackFor(emp);
+    if(fb){
+      if(!row.full_name) row.full_name = fb.full_name;
+      if(!row.wing) row.wing = fb.wing;
+      if(!row.designation) row.designation = fb.designation;
+    }
+    return row;
+  }
+  function hydrateReportRows(){
+    try{ if(typeof reportRows !== 'undefined' && Array.isArray(reportRows)) reportRows = reportRows.map(r => hydrateRow(Object.assign({}, r))); }catch(e){}
+  }
+  function progressStorageKey(cid){
+    const emp = currentEmployeeId();
+    const uid = window.portalUser && window.portalUser.id ? window.portalUser.id : 'guest';
+    return 'SWISH_FULL_PROGRESS_' + (emp || uid) + '_' + cid;
+  }
+  function parseJson(value){ try{return JSON.parse(value || '{}') || {};}catch(e){return{};} }
+  window.swishIdentityPatch = {updateIdentityBar, enrichFromDirectory, currentEmployeeId};
+
+  try{ displayName = function(){ return displayFullName(); }; }catch(e){}
+  try{
+    localProgress = function(cid){ return parseJson(localStorage.getItem(progressStorageKey(cid))); };
+    window.localProgress = localProgress;
+  }catch(e){}
+  try{
+    saveProgress = async function(cid, patch){
+      const current = (typeof localProgress === 'function') ? localProgress(cid) : {};
+      const next = Object.assign({product_done:[], tile_feature_done:[], tile_collection_done:[]}, current, patch || {});
+      localStorage.setItem(progressStorageKey(cid), JSON.stringify(next));
+      const pc = (typeof progressCalcFrom === 'function') ? progressCalcFrom(next, cid) : {productPct:0, featurePct:0, collectionPct:0};
+      const row = {user_id: window.portalUser ? window.portalUser.id : null, consignment_id: cid, product_done: next.product_done || [], tile_feature_done: next.tile_feature_done || [], tile_collection_done: next.tile_collection_done || [], product_progress: pc.productPct, tile_feature_progress: pc.featurePct, tile_collection_progress: pc.collectionPct, updated_at: new Date().toISOString()};
+      try{
+        if(typeof myProgress !== 'undefined'){
+          const idx = myProgress.findIndex(p => (p.consignment_id || '57B') === cid);
+          if(idx >= 0) myProgress[idx] = Object.assign({}, myProgress[idx], row); else myProgress.push(row);
+        }
+      }catch(e){}
+      try{ if(typeof renderHomeMetrics === 'function') renderHomeMetrics(); if(typeof renderProgressPage === 'function') renderProgressPage(); }catch(e){}
+      if(window.portalUser && window.supabaseClient){
+        const res = await window.supabaseClient.from('consignment_progress').upsert(Object.assign({}, row, {user_id:window.portalUser.id}), {onConflict:'user_id,consignment_id'});
+        if(res.error){ console.warn('progress sync error', res.error); if(typeof toast === 'function') toast('Local progress saved. Supabase progress table/RLS check needed.'); }
+        else if(typeof toast === 'function') toast('Progress saved to report');
+      }
+    };
+    window.saveProgress = saveProgress;
+  }catch(e){ console.warn('phase5u saveProgress override failed', e); }
+
+  const oldApplyRoleVisibility = (typeof applyRoleVisibility === 'function') ? applyRoleVisibility : null;
+  if(oldApplyRoleVisibility){
+    applyRoleVisibility = function(){ commitMergedProfile(); const result = oldApplyRoleVisibility.apply(this, arguments); updateIdentityBar(); return result; };
+    window.applyRoleVisibility = applyRoleVisibility;
+  }
+  const oldHandleSession = (typeof handleSession === 'function') ? handleSession : null;
+  if(oldHandleSession){
+    handleSession = async function(session){ const result = await oldHandleSession.apply(this, arguments); await enrichFromDirectory(); updateIdentityBar(); try{ if(typeof applyRoleVisibility === 'function') applyRoleVisibility(); if(typeof renderHomeMetrics === 'function') renderHomeMetrics(); if(typeof renderProgressPage === 'function') renderProgressPage(); if(typeof renderReportPage === 'function') renderReportPage(); }catch(e){} return result; };
+    window.handleSession = handleSession;
+  }
+  const oldLoadReportData = (typeof loadReportData === 'function') ? loadReportData : null;
+  if(oldLoadReportData){
+    loadReportData = async function(){ const result = await oldLoadReportData.apply(this, arguments); hydrateReportRows(); try{ if(typeof renderReportPage === 'function') renderReportPage(); if(typeof renderProgressPage === 'function') renderProgressPage(); }catch(e){} return result; };
+    window.loadReportData = loadReportData;
+  }
+  const oldRenderReportPage = (typeof renderReportPage === 'function') ? renderReportPage : null;
+  if(oldRenderReportPage){
+    renderReportPage = function(){ hydrateReportRows(); updateIdentityBar(); return oldRenderReportPage.apply(this, arguments); };
+    window.renderReportPage = renderReportPage;
+  }
+  const style = document.createElement('style');
+  style.id = 'phase5u-identity-progress-style';
+  style.textContent = `.loggedIdentityBar{background:rgba(5,10,14,.88);border-bottom:1px solid rgba(255,255,255,.10);backdrop-filter:blur(14px)}.loggedIdentityInner{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:10px 0}.loggedIdentityInner b{font-size:15px;color:#fff}.identityLabel{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:#71e8ff;font-weight:900;margin-bottom:2px}.identityMeta{display:block;font-size:12px;color:#c6d4e2;margin-top:2px}.identityNote{max-width:520px;text-align:right;color:#aebdca;font-size:12.5px;line-height:1.45}.identityNote b{font-size:12.5px;color:#f7dc98}@media(max-width:820px){.loggedIdentityInner{align-items:flex-start;flex-direction:column}.identityNote{text-align:left;max-width:none}}`;
+  document.head.appendChild(style);
+  function boot(){ commitMergedProfile(); enrichFromDirectory().then(updateIdentityBar); updateIdentityBar(); hydrateReportRows(); }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+})();
+</script>
+
 </body>
 </html>
